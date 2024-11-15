@@ -1,0 +1,25 @@
+{
+  "name": "bus-ticket-booking",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "bcryptjs": "^2.4.3",
+    "config": "^3.3.12",
+    "express": "^4.21.1",
+    "express-async-errors": "^3.1.1",
+    "joi": "^17.13.3",
+    "jsonwebtoken": "^9.0.2",
+    "mongo": "^0.1.0",
+    "mongodb": "^6.10.0",
+    "uuid": "^11.0.3",
+    "winston": "^3.16.0",
+    "winston-mongodb": "^6.0.0"
+  }
+}
