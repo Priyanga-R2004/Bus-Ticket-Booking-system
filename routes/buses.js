@@ -164,7 +164,7 @@ router.post("/routes", async (req, res) => {
       seat_numbers: seat_numbers.map(seat => ({ seat_number: seat.seat_number })),
       no_of_seats: seat_numbers.length,
       total_price: totalPrice,
-      user_id: req.user.userId, 
+      user_id: ObjectId.createFromHexString(req.user.userId), 
       payment_status: 'pending',
       booking_date: new Date(),
       booking_status: 'booked'
@@ -257,36 +257,53 @@ router.post("/routes", async (req, res) => {
       total_price: booking.total_price,
     });
   });
+  router.post('/feedback', auth, async (req, res) => {
+    const { error } = feedbackSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({ error: error.details[0].message });
+    }
   
-router.post('/feedback', auth, async (req, res) => {
-  const { error } = feedbackSchema.validate(req.body);
-  if (error) {
-    return res.status(400).json({ error: error.details[0].message });
-  }
-
-  const { bus_id, review_msg } = req.body;
-  
+    const { bus_id, review_msg } = req.body;
     const db = req.app.locals.db;
     const user = req.user;
-
+  
+  
     const busExists = await db.collection('buses').findOne({ _id: ObjectId.createFromHexString(bus_id) });
     if (!busExists) {
       return res.status(404).json({ error: 'Bus not found.' });
     }
-
+  
+    const booking = await db.collection('bookings').findOne({
+      user_id: ObjectId.createFromHexString(user.userId),
+      bus_id: ObjectId.createFromHexString(bus_id),
+      booking_status: 'booked',  
+    });
+  console.log(booking);
+    if (!booking) {
+      return res.status(403).json({ error: 'You must complete the journey before providing feedback.' });
+    }
+ 
+    const currentDate = new Date();
+    const busStop = busExists.route.stops.find(stop => stop.location === booking.from); 
+    const travelDate = new Date(busStop.time); 
+  
+    if (currentDate < travelDate) {
+      return res.status(403).json({ error: 'You can only provide feedback after the journey is completed.' });
+    }
+  
     const feedback = {
       user_id: user.userId,
       bus_id: bus_id,
-      user_name: user.email,
       review_msg: review_msg,
-      date: new Date()
+      date: new Date(),
     };
-
-    await db.collection('feedbacks').insertOne(feedback);
-
-    res.status(201).json({ message: 'Feedback submitted successfully.' });
   
-});
+   
+    await db.collection('feedbacks').insertOne(feedback);
+  
+    res.status(201).json({ message: 'Feedback submitted successfully.' });
+  });
+  
 
 router.get('/feedback', [auth,admin], async (req, res) => {
   const { bus_id } = req.body;
@@ -313,7 +330,7 @@ router.post('/cancel-booking', auth, async (req, res) => {
     seats: Joi.array().items(
       Joi.object({
         seat_number: Joi.string().required(),
-        name: Joi.string().required(),
+        name:Joi.string().required()
       })
     ).required()
   }).validate(req.body);
@@ -331,20 +348,18 @@ router.post('/cancel-booking', auth, async (req, res) => {
     return res.status(404).json({ error: 'Booking not found.' });
   }
 
-
-  if (booking.user_details.user_id !== user.userId) {
+  if (booking.user_id.toString() !== user.userId) {
     return res.status(403).json({ error: 'You are not authorized to cancel this booking.' });
   }
 
-  const bus = await db.collection('buses').findOne({ _id: ObjectId.createFromHexString(booking.bus_id) });
+  const bus = await db.collection('buses').findOne({ _id: booking.bus_id });
   if (!bus) {
     return res.status(404).json({ error: 'Bus not found.' });
   }
 
-  const { from, to } = booking;
   const canceledSeats = seats.map(seat => seat.seat_number);
-  const remainingSeats = booking.seat_numbers.filter(seat => !canceledSeats.includes(seat));
-
+  const remainingSeats = booking.seat_numbers.filter(seat => !canceledSeats.includes(seat.seat_number));
+  
   
   const refundAmount = canceledSeats.length * booking.total_price / booking.no_of_seats;
   const refundDetails = {
@@ -353,6 +368,7 @@ router.post('/cancel-booking', auth, async (req, res) => {
     refund_date: new Date()
   };
 
+  console.log("aaa");
   const updateBookingResult = await db.collection('bookings').updateOne(
     { booking_id },
     {
@@ -367,7 +383,6 @@ router.post('/cancel-booking', auth, async (req, res) => {
   if (updateBookingResult.modifiedCount === 0) {
     return res.status(500).json({ error: 'Failed to cancel the booking.' });
   }
-
 
   const payment = await db.collection('payments').findOne({ payment_id: booking.payment_id });
   if (payment) {
@@ -387,7 +402,6 @@ router.post('/cancel-booking', auth, async (req, res) => {
     }
   }
 
-
   const routeStops = bus.route.stops;
   const fromIndex = routeStops.findIndex(stop => stop.location === from);
   const toIndex = routeStops.findIndex(stop => stop.location === to);
@@ -396,20 +410,33 @@ router.post('/cancel-booking', auth, async (req, res) => {
     return res.status(404).json({ error: 'Invalid route stops.' });
   }
 
- 
   for (let i = fromIndex; i <= toIndex; i++) {
     const stop = routeStops[i];
-    bus.seat_availability.push(...canceledSeats); 
+    
+    if (!stop.seat_availability) {
+      stop.seat_availability = []; 
+    }
+    
+    
+    const updateBusResult = await db.collection('buses').updateOne(
+      { _id: ObjectId.createFromHexString(bus._id) },
+      { 
+        $push: {
+          'route.stops.$[stop].seat_availability': { $each: canceledSeats }
+        }
+      },
+      {
+        arrayFilters: [{ 'stop.location': stop.location }] // Apply filter to match the stop
+      }
+    );
+    
+    if (updateBusResult.modifiedCount === 0) {
+      return res.status(500).json({ error: 'Failed to update bus seat availability.' });
+    }
   }
-
-  const updateBusResult = await db.collection('buses').updateOne(
-    { _id: ObjectId.createFromHexString(bus._id) },
-    { $set: { seat_availability: bus.seat_availability } }
-  );
-
-  if (updateBusResult.modifiedCount === 0) {
-    return res.status(500).json({ error: 'Failed to update bus seat availability.' });
-  }
+  
+ 
+ 
 
   return res.status(200).json({
     status: 'Booking successfully cancelled and payment refunded.',
@@ -419,5 +446,6 @@ router.post('/cancel-booking', auth, async (req, res) => {
     refund_amount: refundAmount,
   });
 });
+
 
 module.exports = router;
